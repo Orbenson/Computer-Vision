@@ -1,14 +1,15 @@
 import time
-import scipy.io
+import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.image as mpimg
 
-from cv2 import resize, INTER_CUBIC
-from matplotlib.patches import Circle
-
-from ex1_student_solution import Solution
+from solution import Solution
 
 
+COST1 = 0.5
+COST2 = 3.0
+WIN_SIZE = 3
+DISPARITY_RANGE = 20
 ##########################################################
 # Don't forget to fill in your IDs!!!
 # students' IDs:
@@ -25,213 +26,197 @@ def toc(t):
     return float(tic()) - float(t)
 
 
-def load_data(is_perfect_matches=True):
+def forward_map(left_image, labels):
+    labels -= DISPARITY_RANGE
+    mapped = np.zeros_like(left_image)
+    for row in range(left_image.shape[0]):
+        cols = range(left_image.shape[1])
+        mapped[row,
+               np.clip(cols - labels[row, ...], 0, left_image.shape[1] - 1),
+               ...] = left_image[row, cols, ...]
+    return mapped
+
+
+def load_data(is_your_data=False):
     # Read the data:
-    src_img = mpimg.imread('src.jpg')
-    dst_img = mpimg.imread('dst.jpg')
-    if is_perfect_matches:
-        # loading perfect matches
-        matches = scipy.io.loadmat('matches_perfect')
+    if is_your_data:
+        left_image = mpimg.imread('my_image_left.png')
+        right_image = mpimg.imread('my_image_right.png')
     else:
-        # matching points and some outliers
-        matches = scipy.io.loadmat('matches')
-    match_p_dst = matches['match_p_dst'].astype(float)
-    match_p_src = matches['match_p_src'].astype(float)
-    return src_img, dst_img, match_p_src, match_p_dst
+        left_image = mpimg.imread('image_left.png')
+        right_image = mpimg.imread('image_right.png')
+    return left_image, right_image
 
 
 def main():
+    left_image, right_image = load_data()
     solution = Solution()
-    # Parameters
-    max_err = 25
-    inliers_percent = 0.8
-    # loading data with perfect matches
-    src_img, dst_img, match_p_src, match_p_dst = load_data()
-    # Compute naive homography
-    tt = time.time()
-    naive_homography = solution.compute_homography_naive(match_p_src,
-                                                         match_p_dst)
-    print('Naive Homography {:5.4f} sec'.format(toc(tt)))
-    print(naive_homography)
-
-    # Plot naive homography with forward mapping, slow implementation
-    tt = time.time()
-    transformed_image = solution.compute_forward_homography_slow(
-        homography=naive_homography,
-        src_image=src_img,
-        dst_image_shape=dst_img.shape)
-
-    print('Naive Homography Slow computation takes {:5.4f} sec'.format(toc(tt)))
-    plt.figure()
-    forward_panorama_slow_plot = plt.imshow(transformed_image)
-    plt.title('Forward Homography Slow implementation')
-    # plt.show()
-
-    # Plot naive homography with forward mapping, fast implementation
-    tt = time.time()
-    transformed_image_fast = solution.compute_forward_homography_fast(
-        homography=naive_homography,
-        src_image=src_img,
-        dst_image_shape=dst_img.shape)
-
-    print('Naive Homography Fast computation takes {:5.4f} sec'.format(toc(tt)))
-    plt.figure()
-    forward_panorama_fast_plot = plt.imshow(transformed_image_fast)
-    plt.title('Forward Homography Fast implementation')
-    # plt.show()
-
-    # loading data with imperfect matches
-    src_img, dst_img, match_p_src, match_p_dst = load_data(False)
-
-    # Compute naive homography
-    tt = time.time()
-    naive_homography = solution.compute_homography_naive(match_p_src,
-                                                         match_p_dst)
-    print('Naive Homography for imperfect matches {:5.4f} sec'.format(toc(tt)))
-    print(naive_homography)
-
-    # Plot naive homography with forward mapping, fast implementation for
-    # imperfect matches
-    tt = time.time()
-    transformed_image_fast = solution.compute_forward_homography_fast(
-        homography=naive_homography,
-        src_image=src_img,
-        dst_image_shape=dst_img.shape)
-
-    print('Naive Homography Fast computation for imperfect matches takes '
-          '{:5.4f} sec'.format(toc(tt)))
-    plt.figure()
-    forward_panorama_imperfect_matches_plot = plt.imshow(transformed_image_fast)
-    plt.title('Forward Panorama imperfect matches')
-    # plt.show()
-
-    # Test naive homography
-    tt = time.time()
-    fit_percent, dist_mse = solution.test_homography(naive_homography,
-                                                     match_p_src,
-                                                     match_p_dst,
-                                                     max_err)
-    print('Naive Homography Test {:5.4f} sec'.format(toc(tt)))
-    print([fit_percent, dist_mse])
-
-    # Compute RANSAC homography
+    # Compute Sum-Square-Diff distance
     tt = tic()
-    ransac_homography = solution.compute_homography(match_p_src,
-                                                    match_p_dst,
-                                                    inliers_percent,
-                                                    max_err)
-    print('RANSAC Homography {:5.4f} sec'.format(toc(tt)))
-    print(ransac_homography)
+    ssdd = solution.ssd_distance(left_image.astype(np.float64),
+                                 right_image.astype(np.float64),
+                                 win_size=WIN_SIZE,
+                                 dsp_range=DISPARITY_RANGE)
+    print(f"SSDD calculation done in {toc(tt):.4f}[seconds]")
 
-    # Test RANSAC homography
+    # Construct naive disparity image
     tt = tic()
-    fit_percent, dist_mse = solution.test_homography(ransac_homography,
-                                                     match_p_src,
-                                                     match_p_dst,
-                                                     max_err)
-    print('RANSAC Homography Test {:5.4f} sec'.format(toc(tt)))
-    print([fit_percent, dist_mse])
+    label_map = solution.naive_labeling(ssdd)
+    print(f"Naive labeling done in {toc(tt):.4f}[seconds]")
 
-    # Build panorama
+    # plot the left image and the estimated depth
+    fig = plt.figure()
+    plt.subplot(1, 2, 1)
+    plt.imshow(left_image)
+    plt.subplot(1, 2, 2)
+    plt.imshow(label_map)
+    plt.colorbar()
+    plt.title('Naive Depth')
+
+    # Smooth disparity image - Dynamic Programming
     tt = tic()
-    img_pan = solution.panorama(src_img,
-                                dst_img,
-                                match_p_src,
-                                match_p_dst,
-                                inliers_percent,
-                                max_err)
-    print('Panorama {:5.4f} sec'.format(toc(tt)))
+    label_smooth_dp = solution.dp_labeling(ssdd, COST1, COST2)
+    print(f"Dynamic Programming done in {toc(tt):.4f}[seconds]")
 
-    # Course panorama
+    # plot the left image and the estimated depth
     plt.figure()
-    course_panorama_plot = plt.imshow(img_pan)
-    plt.title('Great Panorama')
-    # plt.show()
+    plt.subplot(1, 2, 1)
+    plt.imshow(left_image)
+    plt.title('Source Image')
+    plt.subplot(1, 2, 2)
+    plt.imshow(label_smooth_dp)
+    plt.colorbar()
+    plt.title('Smooth Depth - DP')
+
+    # Compute forward map of the left image to the right image.
+    mapped_image_smooth_dp = forward_map(left_image, labels=label_smooth_dp)
+    # plot left image, forward map image and right image
+    plt.figure()
+    plt.subplot(1, 3, 1)
+    plt.imshow(left_image)
+    plt.title('Source Image')
+    plt.subplot(1, 3, 2)
+    plt.imshow(mapped_image_smooth_dp)
+    plt.title('Smooth Forward map - DP')
+    plt.subplot(1, 3, 3)
+    plt.imshow(right_image)
+    plt.title('Right Image')
+
+    # Generate a dictionary which maps each direction to a label map:
+    tt = tic()
+    direction_to_vote = solution.dp_labeling_per_direction(ssdd, COST1, COST2)
+    print(f"Dynamic programming in all directions done in {toc(tt):.4f}"
+          f"[seconds]")
+
+    # Plot all directions as well as the image, in the center of the plot:
+    plt.figure()
+    for i in range(1, 1 + 9):
+        plt.subplot(3, 3, i)
+        if i < 5:
+            plt.imshow(direction_to_vote[i])
+            plt.title(f'Direction {i}')
+        elif i == 5:
+            plt.imshow(left_image)
+            plt.title(f'Left Image')
+        else:
+            plt.imshow(direction_to_vote[i - 1])
+            plt.title(f'Direction {i - 1}')
+
+    # Smooth disparity image - Semi-Global Mapping
+    tt = tic()
+    label_smooth_sgm = solution.sgm_labeling(ssdd, COST1, COST2)
+    print(f"SGM done in {toc(tt):.4f}[seconds]")
+
+    # Plot Semi-Global Mapping result:
+    plt.figure()
+    plt.subplot(1, 2, 1)
+    plt.imshow(left_image)
+    plt.title('Source Image')
+    plt.subplot(1, 2, 2)
+    plt.imshow(label_smooth_sgm)
+    plt.colorbar()
+    plt.title('Smooth Depth - SGM')
+
+    # Plot the forward map based on the Semi-Global Mapping result:
+    mapped_image_smooth_sgm = forward_map(left_image, labels=label_smooth_sgm)
+    plt.figure()
+    plt.subplot(1, 3, 1)
+    plt.imshow(left_image)
+    plt.title('Source Image')
+    plt.subplot(1, 3, 2)
+    plt.imshow(mapped_image_smooth_sgm)
+    plt.title('Smooth Forward map - SGM')
+    plt.subplot(1, 3, 3)
+    plt.imshow(right_image)
+    plt.title('Right Image')
+
+    ###########################################################################
+    ########################### YOUR IMAGE PLAYGROUND #########################
+    ###########################################################################
+    COST1 = 0.5           # YOU MAY CHANGE THIS
+    COST2 = 3.0           # YOU MAY CHANGE THIS
+    WIN_SIZE = 3          # YOU MAY CHANGE THIS
+    DISPARITY_RANGE = 20  # YOU MAY CHANGE THIS
+
+    your_left_image, your_right_image = load_data(is_your_data=True)
+    solution = Solution()
+    # Compute Sum-Square-Diff distance
+    tt = tic()
+    your_ssdd = solution.ssd_distance(your_left_image.astype(np.float64),
+                                      your_right_image.astype(np.float64),
+                                      win_size=WIN_SIZE,
+                                      dsp_range=DISPARITY_RANGE)
+    print(f"SSDD calculation on your image took: {toc(tt):.4f}[seconds]")
+
+    # plot all directions as well as the image, in the center of the plot
+    tt = tic()
+    your_direction_to_vote = solution.dp_labeling_per_direction(your_ssdd,
+                                                                COST1,
+                                                                COST2)
+    print(f"Dynamic programming in all directions took: {toc(tt):.4f}[seconds]")
+    # Plot all directions as well as the image, in the center of the plot:
+    plt.figure()
+    for i in range(1, 1 + 9):
+        plt.subplot(3, 3, i)
+        if i < 5:
+            plt.imshow(your_direction_to_vote[i])
+            plt.title(f'Direction {i}')
+        elif i == 5:
+            plt.imshow(your_left_image)
+            plt.title(f'Your Left Image')
+        else:
+            plt.imshow(your_direction_to_vote[i - 1])
+            plt.title(f'Direction {i - 1}')
+
+    # Smooth disparity image - Semi-Global Mapping
+    tt = tic()
+    your_label_smooth_sgm = solution.sgm_labeling(your_ssdd, COST1, COST2)
+    print(f"SGM on your image done in {toc(tt):.4f}[seconds]")
+    plt.figure()
+    plt.subplot(1, 2, 1)
+    plt.imshow(your_left_image)
+    plt.title('Your Source Image')
+    plt.subplot(1, 2, 2)
+    plt.imshow(your_label_smooth_sgm)
+    plt.colorbar()
+    plt.title('Your Smooth Depth - SGM')
+
+    # Plot the forward map based on the Semi-Global Mapping result:
+    your_mapped_image_smooth_sgm = forward_map(your_left_image,
+                                               labels=your_label_smooth_sgm)
+    plt.figure()
+    plt.subplot(1, 3, 1)
+    plt.imshow(your_left_image)
+    plt.title('Your Source Image')
+    plt.subplot(1, 3, 2)
+    plt.imshow(your_mapped_image_smooth_sgm)
+    plt.title('Your Smooth Forward map - SGM')
+    plt.subplot(1, 3, 3)
+    plt.imshow(your_right_image)
+    plt.title('Your Right Image')
+
     plt.show()
 
 
-def your_images_loader():
-    src_img_test = mpimg.imread('src_test.jpg')
-    dst_img_test = mpimg.imread('dst_test.jpg')
-
-    DECIMATION_FACTOR = 5.0
-    src_img_test = resize(src_img_test,
-                          dsize=(int(src_img_test.shape[1]/DECIMATION_FACTOR),
-                                 int(src_img_test.shape[0]/DECIMATION_FACTOR)),
-                          interpolation=INTER_CUBIC)
-    dst_img_test = resize(dst_img_test,
-                          dsize=(int(dst_img_test.shape[1]/DECIMATION_FACTOR),
-                                 int(dst_img_test.shape[0]/DECIMATION_FACTOR)),
-                          interpolation=INTER_CUBIC)
-
-    matches_test = scipy.io.loadmat('matches_test')
-
-    match_p_dst = matches_test['match_p_dst'].astype(float)
-    match_p_src = matches_test['match_p_src'].astype(float)
-
-    match_p_dst /= DECIMATION_FACTOR
-    match_p_src /= DECIMATION_FACTOR
-    return src_img_test, dst_img_test, match_p_src, match_p_dst
-
-
-def your_images_main():
-    solution = Solution()
-    # Student Files
-    # first run "create_matching_points.py" with your own images to create a mat
-    # file with the matching coordinates.
-    max_err = 25  # <<<<< YOU MAY CHANGE THIS
-    inliers_percent = 0.8  # <<<<< YOU MAY CHANGE THIS
-
-    src_img_test, dst_img_test, match_p_src, match_p_dst = your_images_loader()
-    homography = solution.compute_homography(match_p_src, match_p_dst,
-                                             inliers_percent,
-                                             max_err=25)
-    img = solution.compute_forward_homography_fast(
-        homography=homography,
-        src_image=src_img_test,
-        dst_image_shape=dst_img_test.shape)
-    plt.figure()
-    import numpy as np
-    student_forward_warp_img = plt.imshow(img.astype(np.uint8))
-    plt.title('Forward warp example')
-    # plt.show()
-
-    backward_homography = solution.compute_homography(match_p_dst, match_p_src,
-                                                      inliers_percent,
-                                                      max_err=25)
-    img = solution.compute_backward_mapping(
-        backward_projective_homography=backward_homography,
-                                      src_image=src_img_test,
-                                      dst_image_shape=dst_img_test.shape)
-    plt.figure()
-    import numpy as np
-    student_backward_warp_img = plt.imshow(img.astype(np.uint8))
-    plt.title('Backward warp example')
-    # plt.show()
-
-    # Build student panorama
-    tt = tic()
-    img_pan = solution.panorama(src_img_test, dst_img_test, match_p_src,
-                                match_p_dst, inliers_percent, max_err)
-    print('Student Panorama {:5.4f} sec'.format(toc(tt)))
-
-    plt.figure()
-    student_panorama = plt.imshow(img_pan)
-    plt.title('Awesome Panorama')
-    # plt.show()
-
-    # Build reversed student panorama
-    tt = tic()
-    img_pan2 = solution.panorama(dst_img_test, src_img_test, match_p_dst,
-                                 match_p_src, inliers_percent, max_err)
-    print('Student Panorama {:5.4f} sec'.format(toc(tt)))
-
-    plt.figure()
-    reversed_student_panorama = plt.imshow(img_pan2)
-    plt.title('Reversed Awesome Panorama')
-    plt.show()
-
-
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
-    your_images_main()
